@@ -95,3 +95,4 @@ summary/
 # Experimental Scripts
 joern-cli/src/main/resources/scripts/*.sc
 joern-cli/src/main/resources/scripts/*.py
+docs/

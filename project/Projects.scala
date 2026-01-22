@@ -20,6 +20,7 @@ object Projects {
   lazy val swiftsrc2cpg  = project.in(frontendsRoot / "swiftsrc2cpg")
   lazy val javasrc2cpg   = project.in(frontendsRoot / "javasrc2cpg")
   lazy val jimple2cpg    = project.in(frontendsRoot / "jimple2cpg")
+  lazy val sootup2cpg    = project.in(frontendsRoot / "sootup2cpg")
   lazy val kotlin2cpg    = project.in(frontendsRoot / "kotlin2cpg")
   lazy val rubysrc2cpg   = project.in(frontendsRoot / "rubysrc2cpg")
   lazy val gosrc2cpg     = project.in(frontendsRoot / "gosrc2cpg")

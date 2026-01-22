@@ -29,18 +29,24 @@ case class TrackedMethod(method: MethodRef) extends TrackedMethodOrTypeRef {
 }
 case class TrackedTypeRef(typeRef: TypeRef) extends TrackedMethodOrTypeRef {
   override def code: String = typeRef.code
+  private lazy val typeKey: String = {
+    typeRef.evalTypeOut.headOption.map(_.fullName).getOrElse {
+      val fullName = Option(typeRef.typeFullName).getOrElse("")
+      if (fullName.nonEmpty && fullName != "<empty>") fullName else typeRef.code
+    }
+  }
 
   override def equals(obj: Any): Boolean = {
     obj match {
-      case TrackedTypeRef(otherTypeRef) =>
-        typeRef.evalTypeOut.head.equals(otherTypeRef.evalTypeOut.head)
+      case other: TrackedTypeRef =>
+        typeKey == other.typeKey
       case _ =>
         false
     }
   }
 
   override def hashCode(): Int = {
-    typeRef.evalTypeOut.head.hashCode()
+    typeKey.hashCode()
   }
 }
 
