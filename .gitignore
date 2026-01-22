@@ -82,3 +82,16 @@ flake.lock
 
 /joern-cli/frontends/c2cpg/eclipse-cdt/build/
 /joern-cli/frontends/c2cpg/eclipse-cdt/org.eclipse.cdt.core-*.jar
+
+# User Local / SootUp2CPG Temporary Files
+mbs.bin
+mbs.semantics
+mbs_summary.yml
+benchmark/
+scanner-result/
+sootup/
+summary/
+
+# Experimental Scripts
+joern-cli/src/main/resources/scripts/*.sc
+joern-cli/src/main/resources/scripts/*.py
