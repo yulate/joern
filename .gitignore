@@ -89,7 +89,7 @@ mbs.semantics
 mbs_summary.yml
 benchmark/
 scanner-result/
-sootup/
+
 summary/
 
 # Experimental Scripts
