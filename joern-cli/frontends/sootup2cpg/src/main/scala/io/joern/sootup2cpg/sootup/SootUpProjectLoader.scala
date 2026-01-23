@@ -33,13 +33,6 @@ import scala.util.Using
 object SootUpProjectLoader {
   private val logger = LoggerFactory.getLogger(getClass)
 
-  private final case class SummaryEntry(
-    classFullName: String,
-    methodName: String,
-    paramTypes: Option[Seq[String]],
-    isStatic: Boolean
-  )
-
   def load(input: Path, config: Config, decompiledSource: Map[String, String] = Map.empty): SootUpProject = {
     // 使用 SootUp 的 JavaView 加载类信息（支持混合源码/字节码输入）
     val javaFiles = collectFiles(input, p => p.toString.endsWith(".java"))
@@ -97,7 +90,7 @@ object SootUpProjectLoader {
           case _                       => None
         }
       }.distinct
-      println(s"[SootUpProjectLoader] Derived ${packages.size} application packages from .class files")
+      logger.info(s"Derived ${packages.size} application packages from .class files")
       packages
     } else if (Files.isRegularFile(input) && input.toString.endsWith(".jar")) {
       // 修正：当输入为单个 JAR 文件时，从 JAR 条目中提取包名
@@ -117,7 +110,7 @@ object SootUpProjectLoader {
           }
           .toSeq
           .distinct
-        println(s"[SootUpProjectLoader] Derived ${packages.size} application packages from JAR: ${input.getFileName}")
+        logger.info(s"Derived ${packages.size} application packages from JAR: ${input.getFileName}")
         packages
       } finally {
         jarFile.close()
@@ -146,7 +139,7 @@ object SootUpProjectLoader {
             jarFile.close()
           }
         }.distinct
-        println(
+        logger.info(
           s"[SootUpProjectLoader] Derived ${packages.size} application packages from ${jarsInDir.size} JARs in staging dir"
         )
         packages
@@ -180,11 +173,11 @@ object SootUpProjectLoader {
           if (optClass.isPresent) {
             forcedClasses += optClass.get()
           } else {
-            println(s"[SootUpProjectLoader] Failed to load class: $className (not found in view)")
+            logger.warn(s"Failed to load class: $className (not found in view)")
           }
         } catch {
           case e: Exception =>
-            println(s"[SootUpProjectLoader] Exception loading class: $className")
+            logger.warn(s"Exception loading class: $className", e)
             e.printStackTrace()
         }
       }
@@ -207,14 +200,14 @@ object SootUpProjectLoader {
 
     // 修正：过滤掉库类 - 仅保留 Application 类用于 CPG 生成
     val applicationClasses = classToSootUpClass.filter(!_.isExternal)
-    println(
+    logger.info(
       s"[SootUpProjectLoader] Filtered ${classToSootUpClass.size} total -> ${applicationClasses.size} application classes"
     )
 
     if (applicationClasses.isEmpty) {
       logger.info(s"未从 SootUp 加载到类：$input")
     }
-    println(s"[SootUpProjectLoader] Final SootUpProject contains ${applicationClasses.size} classes.")
+    logger.info(s"Final SootUpProject contains ${applicationClasses.size} classes.")
     SootUpProject(applicationClasses)
   }
 
@@ -272,7 +265,7 @@ object SootUpProjectLoader {
   ): SootUpClass = {
     val currentCount = classCounter.incrementAndGet()
     if (currentCount % 100 == 0) {
-      println(s"[SootUpProjectLoader] Progress: $currentCount classes processed...")
+      logger.info(s"Progress: $currentCount classes processed...")
     }
     val classType   = clazz.getType.asInstanceOf[JavaClassType]
     val packageName = classType.getPackageName.getName
@@ -299,7 +292,7 @@ object SootUpProjectLoader {
 
     // 每处理 100 个类记录一次日志（主要是为了显示进度）
     if (System.identityHashCode(clazz) % 100 == 0) {
-      if (isExternalClass) println(s"[SootUpProjectLoader] 处理类: $fullName (Library)")
+      if (isExternalClass) logger.debug(s"处理类: $fullName (Library)")
     }
 
     // 继承与接口信息
@@ -376,7 +369,8 @@ object SootUpProjectLoader {
         stmts = bodyStmts,
         exceptionHandlers = exceptionHandlers,
         graph = stmtGraph,
-        annotations = annotations
+        annotations = annotations,
+        summary = summaryEntries.filter(entry => matchesSummary(method, entry))
       )
     }
 
@@ -465,16 +459,20 @@ object SootUpProjectLoader {
     if (start < 0 || end <= start) return None
     val content = line.substring(start + 1, end)
     val parts   = splitCsvLike(content).map(unquote)
-    if (parts.length < 5) return None
-    val pkg        = parts(0)
-    val typeName   = parts(1)
-    val isStatic   = parts(2).equalsIgnoreCase("true")
-    val rawMethod  = parts(3)
-    val signature  = parts(4)
+    if (parts.length < 9) return None
+    val pkg       = parts(0)
+    val typeName  = parts(1)
+    val isStatic  = parts(2).equalsIgnoreCase("true")
+    val rawMethod = parts(3)
+    val signature = parts(4)
+    val input     = parts.lift(6).filter(_.nonEmpty)
+    val output    = parts.lift(7).filter(_.nonEmpty)
+    val kind      = parts.lift(8).filter(_.nonEmpty)
+
     val simpleType = typeName.split("\\$").lastOption.getOrElse(typeName)
     val methodName = if (rawMethod == simpleType) "<init>" else rawMethod
     val paramTypes = parseParamTypes(signature)
-    Some(SummaryEntry(s"$pkg.$typeName", methodName, paramTypes, isStatic))
+    Some(SummaryEntry(s"$pkg.$typeName", methodName, paramTypes, isStatic, input, output, kind))
   }
 
   private def parseParamTypes(signature: String): Option[Seq[String]] = {

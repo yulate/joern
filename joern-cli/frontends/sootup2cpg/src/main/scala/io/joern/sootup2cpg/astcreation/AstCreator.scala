@@ -168,13 +168,15 @@ class AstCreator(clazz: SootUpClass, global: Global)(implicit withSchemaValidati
     try {
       doAstForMethod(method, clazz)
     } catch {
-      case e: Exception =>
+      case e: Throwable =>
         logger.warn(s"FAILED processing method: ${method.fullName}", e)
+        e.printStackTrace()
         throw e
     }
   }
 
   private def doAstForMethod(method: SootUpMethod, clazz: SootUpClass): Ast = {
+
     registerType(method.returnType)
     method.parameters.foreach(p => registerType(p.typeFullName))
 
@@ -236,9 +238,15 @@ class AstCreator(clazz: SootUpClass, global: Global)(implicit withSchemaValidati
 
     val body =
       if (method.isExternal) {
-        // 外部方法仅保留空的 BLOCK，避免语义被内部实现干扰
-        blockAst(NewBlock().typeFullName(Defines.Any), List.empty)
+        if (method.summary.nonEmpty) {
+
+          createSyntheticBody(method, clazz)
+        } else {
+          // 外部方法仅保留空的 BLOCK，避免语义被内部实现干扰
+          blockAst(NewBlock().typeFullName(Defines.Any), List.empty)
+        }
       } else {
+
         val locals = method.locals.map { local =>
           registerType(local.getType.toString)
           val localNode_ =
@@ -365,6 +373,7 @@ class AstCreator(clazz: SootUpClass, global: Global)(implicit withSchemaValidati
         blockAst(NewBlock().typeFullName(Defines.Any), (localsAsts ++ stmtAsts).toList)
       }
     val paramsWithThis = thisParamAst.toSeq ++ parameterAsts
+
     methodAst(methodNode_, paramsWithThis, body, methodReturn).withChildren(annotationAsts)
   }
 
@@ -886,7 +895,135 @@ class AstCreator(clazz: SootUpClass, global: Global)(implicit withSchemaValidati
         }
       }
     }
+
     // 从 AST 根开始遍历
     ast.root.foreach(traverse)
+  }
+
+  private def createSyntheticBody(method: SootUpMethod, clazz: SootUpClass): Ast = {
+    // 解析所有数据流规则：Input -> Output
+    // Output 映射: None -> ReturnValue; Some(idx) -> Argument[idx]
+    val flows = method.summary.flatMap { s =>
+      val inputs  = parseInputIndices(s.input.getOrElse(""))
+      val outputs = parseOutputIndices(s.output.getOrElse(""))
+      outputs.map(out => out -> inputs)
+    }
+
+    // 聚合流向同一目标的数据源: Target -> Unique Inputs
+    val groupedFlows = flows.groupMap(_._1)(_._2).map { case (k, v) => k -> v.flatten.distinct.sorted }
+
+    var stmts = List.empty[Ast]
+
+    // 1. 处理副作用 (Side Effects): Arg2Base, Arg2Arg
+    // 生成: param_dst = <operator>.taintMerge(param_dst, param_src...)
+    groupedFlows.collect {
+      case (Some(targetIdx), sources) if sources.nonEmpty =>
+        // 为了保留目标原有的污点状态，将目标自身也加入 Merge 源
+        val allSources = (sources :+ targetIdx).distinct.sorted
+        stmts :+= createTaintAssignment(method, clazz, targetIdx, allSources)
+    }
+
+    // 2. 处理返回值 (ReturnValue): Arg2Ret, Base2Ret
+    // 生成: return <operator>.taintMerge(param_src...)
+    val returnSources = groupedFlows.getOrElse(None, Seq.empty)
+    if (returnSources.nonEmpty) {
+      stmts :+= createTaintReturn(method, clazz, returnSources)
+    } else {
+      // 即使没有返回值流数据，为了保证 CPG 完整性，如果是无返回值的 void 方法，通常隐含一个 RET
+      // 这里如果 stmts 不为空（有副作用），则无需强制加 return
+    }
+
+    if (stmts.isEmpty) {
+      blockAst(NewBlock().typeFullName(Defines.Any), List.empty)
+    } else {
+      blockAst(NewBlock().typeFullName(Defines.Any), stmts)
+    }
+  }
+
+  private def createTaintAssignment(
+    method: SootUpMethod,
+    clazz: SootUpClass,
+    targetIdx: Int,
+    sources: Seq[Int]
+  ): Ast = {
+    val (destName, destType) = getParamInfo(method, clazz, targetIdx)
+    val destNode             = NewIdentifier().name(destName).code(destName).typeFullName(destType)
+
+    val mergeCall = createTaintMergeCall(method, clazz, sources, destType)
+
+    val assignment = NewCall()
+      .name(Operators.assignment)
+      .methodFullName(Operators.assignment)
+      .code(s"$destName = ${mergeCall.root.get.asInstanceOf[NewCall].code}")
+      .dispatchType(DispatchTypes.STATIC_DISPATCH)
+      .typeFullName(destType)
+
+    Ast(assignment).withChild(Ast(destNode)).withChild(mergeCall)
+  }
+
+  private def createTaintReturn(method: SootUpMethod, clazz: SootUpClass, sources: Seq[Int]): Ast = {
+    val mergeCall = createTaintMergeCall(method, clazz, sources, method.returnType)
+    val code      = s"return ${mergeCall.root.get.asInstanceOf[NewCall].code}"
+    Ast(NewReturn().code(code)).withChild(mergeCall)
+  }
+
+  private def createTaintMergeCall(
+    method: SootUpMethod,
+    clazz: SootUpClass,
+    sources: Seq[Int],
+    returnType: String
+  ): Ast = {
+    val argsInfo = sources.map(idx => getParamInfo(method, clazz, idx))
+    val argsCode = argsInfo.map(_._1).mkString(", ")
+    val callCode = s"<operator>.taintMerge($argsCode)"
+
+    val callNode = NewCall()
+      .name("<operator>.taintMerge")
+      .methodFullName("<operator>.taintMerge")
+      .code(callCode)
+      .signature("ANY(ANY...)")
+      .typeFullName(returnType)
+      .dispatchType(DispatchTypes.STATIC_DISPATCH)
+
+    val children = argsInfo.map { case (name, tpe) =>
+      Ast(NewIdentifier().name(name).code(name).typeFullName(tpe))
+    }
+    Ast(callNode).withChildren(children)
+  }
+
+  private def parseOutputIndices(outputStr: String): Seq[Option[Int]] = {
+    // ReturnValue -> None
+    // Argument[i] -> Some(i)
+    // 粗粒度策略：忽略 Field/AccessPath，只看 Root 对象
+    if (outputStr.startsWith("ReturnValue")) {
+      Seq(None)
+    } else {
+      val pattern = "Argument\\[(-?\\d+)\\]".r
+      pattern.findFirstMatchIn(outputStr).map(_.group(1).toInt).map(Some(_)).toSeq
+    }
+  }
+
+  private def parseInputIndices(inputStr: String): Seq[Int] = {
+    // 处理 "Argument[0]", "Argument[0..1]", "Argument[-1]"
+    val pattern = "Argument\\[(-?\\d+)(\\.\\.(-?\\d+))?\\]".r
+    pattern
+      .findFirstMatchIn(inputStr)
+      .map { m =>
+        val start = m.group(1).toInt
+        val end   = Option(m.group(3)).map(_.toInt).getOrElse(start)
+        (start to end)
+      }
+      .getOrElse(Seq.empty)
+  }
+
+  private def getParamInfo(method: SootUpMethod, clazz: SootUpClass, index: Int): (String, String) = {
+    if (index == -1 && !method.isStatic) {
+      ("this", clazz.fullName)
+    } else if (index >= 0 && index < method.parameters.size) {
+      val p = method.parameters(index)
+      (p.name, p.typeFullName)
+    } else {
+      (s"param$index", Defines.Any)
+    }
   }
 }

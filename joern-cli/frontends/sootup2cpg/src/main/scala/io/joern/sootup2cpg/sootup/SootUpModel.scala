@@ -8,11 +8,21 @@ object SootUpModel {
 
   trait SootUpNode {
     def code: String
-    def lineNumber: Option[Int] = None
-    def columnNumber: Option[Int] = None
-    def lineNumberEnd: Option[Int] = None
+    def lineNumber: Option[Int]      = None
+    def columnNumber: Option[Int]    = None
+    def lineNumberEnd: Option[Int]   = None
     def columnNumberEnd: Option[Int] = None
   }
+
+  final case class SummaryEntry(
+    classFullName: String,
+    methodName: String,
+    paramTypes: Option[Seq[String]],
+    isStatic: Boolean,
+    input: Option[String] = None,
+    output: Option[String] = None,
+    kind: Option[String] = None
+  )
 
   final case class SootUpSimpleNode(
     code: String,
@@ -40,11 +50,7 @@ object SootUpModel {
     override def code: String = name
   }
 
-  final case class SootUpField(
-    name: String,
-    typeFullName: String,
-    isStatic: Boolean = false
-  ) extends SootUpNode {
+  final case class SootUpField(name: String, typeFullName: String, isStatic: Boolean = false) extends SootUpNode {
     override def code: String = s"$typeFullName $name"
   }
 
@@ -65,16 +71,14 @@ object SootUpModel {
     // 控制流图 (新增)
     graph: Option[Any] = None,
     // 注解信息 (新增): 存储方法的注解列表，用于生成 CPG ANNOTATION 节点
-    annotations: Seq[String] = Seq.empty
+    annotations: Seq[String] = Seq.empty,
+    // CodeQL Summary 信息
+    summary: Seq[SummaryEntry] = Seq.empty
   ) extends SootUpNode {
     override def code: String = s"$name$signature"
   }
 
-  final case class SootUpParam(
-    name: String,
-    typeFullName: String,
-    order: Int
-  ) extends SootUpNode {
+  final case class SootUpParam(name: String, typeFullName: String, order: Int) extends SootUpNode {
     override def code: String = s"$typeFullName $name"
   }
 }

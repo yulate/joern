@@ -10,11 +10,10 @@ import org.slf4j.LoggerFactory
 
 /** AST 创建 Pass - 并行处理 SootUp 类模型，生成 CPG AST。
   *
-  * == 概述 ==
-  * 本 Pass 是 sootup2cpg 的核心数据处理单元。它继承自 `ForkJoinParallelCpgPass`，
-  * 利用 Fork-Join 并行框架高效处理大型项目中的大量类。
+  * ==概述==
+  * 本 Pass 是 sootup2cpg 的核心数据处理单元。它继承自 `ForkJoinParallelCpgPass`， 利用 Fork-Join 并行框架高效处理大型项目中的大量类。
   *
-  * == 处理流程 ==
+  * ==处理流程==
   * {{{
   *   SootUpProject (输入)
   *       │
@@ -28,15 +27,18 @@ import org.slf4j.LoggerFactory
   *   DiffGraphBuilder (合并到 CPG)
   * }}}
   *
-  * == 并行安全 ==
-  * 每个类的 AST 生成是独立的，通过 `AstCreator` 产生独立的 `DiffGraphBuilder`，
-  * 然后由框架安全地合并到主 CPG。
+  * ==并行安全==
+  * 每个类的 AST 生成是独立的，通过 `AstCreator` 产生独立的 `DiffGraphBuilder`， 然后由框架安全地合并到主 CPG。
   *
-  * @param project SootUp 加载的项目模型（包含类、方法等）
-  * @param cpg     目标 CPG（AST 将被写入此处）
-  * @param config  前端配置
+  * @param project
+  *   SootUp 加载的项目模型（包含类、方法等）
+  * @param cpg
+  *   目标 CPG（AST 将被写入此处）
+  * @param config
+  *   前端配置
   *
-  * @see [[io.joern.sootup2cpg.astcreation.AstCreator]] 单类 AST 生成器
+  * @see
+  *   [[io.joern.sootup2cpg.astcreation.AstCreator]] 单类 AST 生成器
   */
 class AstCreationPass(project: SootUpProject, cpg: Cpg, config: Config)
     extends ForkJoinParallelCpgPass[SootUpClass](cpg) {
@@ -49,39 +51,36 @@ class AstCreationPass(project: SootUpProject, cpg: Cpg, config: Config)
     *
     * 将项目中的所有类转换为独立的处理单元，每个类可以被并行处理。
     *
-    * @return 类对象数组，每个元素将触发一次 runOnPart 调用
+    * @return
+    *   类对象数组，每个元素将触发一次 runOnPart 调用
     */
   override def generateParts(): Array[? <: AnyRef] = {
-    println(s"[AstCreationPass] Generating parts for ${project.classes.size} classes.")
+
     project.classes.toArray
   }
 
   /** 处理单个类，生成其 AST 并合并到 CPG。
     *
     * 此方法由 Fork-Join 框架并行调用，每次处理一个类：
-    *   1. 创建该类专属的 AstCreator 实例
-    *   2. 调用 createAst() 生成 DiffGraphBuilder
-    *   3. 将结果合并到主 builder
+    *   1. 创建该类专属的 AstCreator 实例 2. 调用 createAst() 生成 DiffGraphBuilder 3. 将结果合并到主 builder
     *
-    * == 线程安全 ==
-    * - 每个类有独立的 AstCreator 和 localDiff
-    * - global（类型注册表）使用线程安全的 ConcurrentHashMap
-    * - builder.absorb() 由框架保证线程安全
+    * ==线程安全==
+    *   - 每个类有独立的 AstCreator 和 localDiff
+    *   - global（类型注册表）使用线程安全的 ConcurrentHashMap
+    *   - builder.absorb() 由框架保证线程安全
     *
-    * @param builder 主 DiffGraphBuilder（由框架管理）
-    * @param part    待处理的 SootUp 类模型
+    * @param builder
+    *   主 DiffGraphBuilder（由框架管理）
+    * @param part
+    *   待处理的 SootUp 类模型
     */
   override def runOnPart(builder: DiffGraphBuilder, part: SootUpClass): Unit = {
     // 调试日志：用于追踪特定类的处理
-    if (part.fullName.contains("HomeController")) {
-      println(s"[AstCreationPass] Processing class ${part.fullName} with ${part.methods.size} methods.")
-    }
+
     try {
       // 为此类创建独立的 AstCreator，生成其 AST
       val localDiff = new AstCreator(part, global)(config.schemaValidation).createAst()
-      if (part.fullName.contains("HomeController")) {
-        println(s"[AstCreationPass] HomeController diffGraph size: ${localDiff.size}")
-      }
+
       builder.absorb(localDiff)
     } catch {
       case e: Exception =>
